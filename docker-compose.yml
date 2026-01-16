@@ -3,7 +3,7 @@ services:
     container_name: gateway-localstack
     image: localstack/localstack:latest
     ports:
-      - "${LOCALSTACK_PORT}"
+      - "${LOCALSTACK_PORT}:4566"
     environment:
       - SERVICES=${LOCALSTACK_SERVICES}
       - DEBUG=${LOCALSTACK_DEBUG}
@@ -31,9 +31,9 @@ services:
       localstack:
         condition: service_healthy
     ports:
-      - "${DYNAMODB_ADMIN_PORT}"
+      - "${DYNAMODB_ADMIN_PORT}:8001"
     environment:
-      # LocalStack の DynamoDB エンドポイント
+      # aaronshaf/dynamodb-admin イメージ が 内部的に使用している環境変数
       - DYNAMO_ENDPOINT=${AWS_ENDPOINT_URL}
       - AWS_REGION=${AWS_REGION}
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
