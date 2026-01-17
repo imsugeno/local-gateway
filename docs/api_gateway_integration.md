@@ -2,7 +2,7 @@
 
 ## 概要
 
-このドキュメントでは、API Gatewayの統合設定（MOCK統合、AWS_PROXY統合）と、LocalStackでの動作について説明します。
+このドキュメントでは、API Gatewayの統合設定（MOCK統合、Lambda統合（非プロキシ））と、LocalStackでの動作について説明します。
 
 ## 統合設定の種類
 
@@ -31,12 +31,11 @@
 - **処理の流れ**: バックエンド → 統合レスポンス（変換） → メソッドレスポンス
 - **response-templates**: レスポンスを変換するテンプレート
 
-**注意**: AWS_PROXY統合では不要（Lambda関数が直接HTTPレスポンスを返すため）
+**注意**: Lambda統合（非プロキシ）では統合レスポンスが必要（レスポンス変換が必要なため）
 
 ```
-※現状では設定していない（削除処理のみ実行）
-既存のMOCK統合の残骸をクリーンアップするため、削除処理を実行しているが、
-新規に統合レスポンスを設定することはない
+※現状では200のみ設定
+Authorizationヘッダーの書き換えに合わせて統合レスポンスを設定している
 ```
 
 ### 3. メソッドレスポンス（Method Response）
@@ -46,12 +45,10 @@
 - **何を設定するか**: クライアントが受け取る可能性のあるレスポンスの構造
 - **処理の流れ**: 統合レスポンス → メソッドレスポンス（検証） → クライアント
 
-**注意**: AWS_PROXY統合では不要（Lambda関数が直接HTTPレスポンスを返すため）
+**注意**: Lambda統合（非プロキシ）ではメソッドレスポンスが必要（レスポンス契約が必要なため）
 
 ```
-※現状では設定していない（削除処理のみ実行）
-既存のMOCK統合の残骸をクリーンアップするため、削除処理を実行しているが、
-新規にメソッドレスポンスを設定することはない
+※現状では200のみ設定
 ```
 
 ## 処理の流れ
@@ -68,7 +65,7 @@
 クライアントレスポンス ← メソッドレスポンスで定義された形式で返す
 ```
 
-### AWS_PROXY統合の場合
+### Lambda統合（非プロキシ）+マッピングテンプレートの場合
 
 ```
 クライアントリクエスト
@@ -77,9 +74,10 @@
     ↓
 【認証成功時のみ】メソッド（GET）が実行される
     ↓
-【AWS_PROXY統合】test-function Lambda関数が呼び出される
+【Lambda統合（非プロキシ）】マッピングテンプレートでAuthorizationヘッダーをinternal_tokenに置換したイベントが
+test-function Lambda関数に渡される
     ↓
-クライアントレスポンス ← Lambda関数のレスポンスがそのまま返る
+クライアントレスポンス ← 統合レスポンスでLambda関数のレスポンスを変換して返る
 ```
 
 ## curlコマンド実行時の処理フロー
@@ -104,7 +102,7 @@
    - Effect: "Allow"
    - PrincipalID: "user"
    - Resource: メソッドARN
-   - Context: { "token": "allow" }
+   - Context: { "token": "allow", "internal_token": "internal-allow" }
    
 5. 【認証失敗時】AuthorizerがDenyポリシーを返す
    - Effect: "Deny"
@@ -114,8 +112,8 @@
    - リソース: /test
    - HTTPメソッド: GET
    
-7. 【AWS_PROXY統合】test-function Lambda関数が呼び出される
-   - Lambda関数の実際のレスポンスが返る
+7. 【Lambda統合（非プロキシ）】マッピングテンプレートでAuthorizationヘッダーをinternal_tokenに書き換え
+   - 書き換え後のイベントがtest-function Lambda関数に渡される
    
 8. クライアントにレスポンスが返る
    {
@@ -128,24 +126,27 @@
 
 ### 実装方針
 
-現在の実装では、**AWS_PROXY統合のみ**を使用しています。MOCK統合は設定していません。
+現在の実装では、**Lambda統合（非プロキシ）+リクエストマッピングテンプレート**を使用しています。MOCK統合は設定していません。
 
 ### 実装の流れ
 
 1. **既存の統合レスポンスとメソッドレスポンスを削除**
    - MOCK統合の残骸をクリーンアップ
    - 複数のステータスコード（200, 400, 500など）を削除
-   - AWS_PROXY統合では不要なため、事前に削除
 
 2. **test-function Lambda関数のARNを取得**
    - `test-function` が存在するか確認
 
-3. **AWS_PROXY統合を設定（test-functionが見つかった場合のみ）**
+3. **Lambda統合（非プロキシ）+リクエストマッピングテンプレートを設定（test-functionが見つかった場合のみ）**
    - `test-function` Lambda関数のARNを取得
    - `test-function` にAPI Gatewayからの呼び出し権限を付与
-   - `--type AWS_PROXY` でLambda関数を呼び出す統合を設定
+   - `--type AWS` でLambda関数を呼び出す統合を設定
+   - Authorizationヘッダーをinternal_tokenに書き換えるテンプレートを設定
 
-4. **test-functionが見つからない場合**
+4. **メソッドレスポンスと統合レスポンスを設定**
+   - 200のみ定義（シンプルな変換）
+
+5. **test-functionが見つからない場合**
    - 警告メッセージを表示
    - 利用可能なLambda関数の一覧を表示
    - 統合設定をスキップ（統合が設定されない状態になる）
@@ -153,81 +154,59 @@
 ### 実装の詳細
 
 **統合レスポンスとメソッドレスポンスの削除**:
-- AWS_PROXY統合を設定する前に、既存の設定をクリーンアップ
+- 既存の設定をクリーンアップ
 - ステータスコード200, 400, 500を削除
 - エラーは無視（既に存在しない場合もあるため）
 
-**AWS_PROXY統合の設定**:
+**Lambda統合（非プロキシ）の設定**:
 - `test-function` が見つかった場合のみ実行
-- 統合レスポンスとメソッドレスポンスは設定しない（不要なため）
+- Authorizationヘッダーを書き換えるリクエストテンプレートを設定
+- 200のメソッドレスポンス/統合レスポンスを設定
 
 ### 実装コード（抜粋）
 
 ```bash
-# 既存の統合レスポンスとメソッドレスポンスを削除（MOCK統合の残骸をクリーンアップ）
-echo "[apigateway] cleaning up existing integration responses and method responses"
-for status_code in 200 400 500; do
-  aws apigateway delete-integration-response \
-    --rest-api-id "$API_ID" \
-    --resource-id "$RESOURCE_ID" \
-    --http-method "$HTTP_METHOD" \
-    --status-code "$status_code" \
-    --endpoint-url="$ENDPOINT" >/dev/null 2>/dev/null || true
-  
-  aws apigateway delete-method-response \
-    --rest-api-id "$API_ID" \
-    --resource-id "$RESOURCE_ID" \
-    --http-method "$HTTP_METHOD" \
-    --status-code "$status_code" \
-    --endpoint-url="$ENDPOINT" >/dev/null 2>/dev/null || true
-done
+# Lambda統合（非プロキシ） + request templates
+aws apigateway put-integration \
+  --rest-api-id "$API_ID" \
+  --resource-id "$RESOURCE_ID" \
+  --http-method "$HTTP_METHOD" \
+  --type AWS \
+  --integration-http-method POST \
+  --uri "arn:aws:apigateway:${REGION}:lambda:path/2015-03-31/functions/${TEST_FUNCTION_ARN}/invocations" \
+  --request-templates "file://$REQUEST_TEMPLATE_FILE" \
+  --endpoint-url="$ENDPOINT" >/dev/null
 
-# test-function Lambda関数のARNを取得
-TEST_FUNCTION_ARN=$(aws lambda get-function \
-  --function-name "test-function" \
-  --endpoint-url="$ENDPOINT" \
-  --query 'Configuration.FunctionArn' \
-  --output text 2>/dev/null)
+# 200のメソッドレスポンスと統合レスポンス
+aws apigateway put-method-response \
+  --rest-api-id "$API_ID" \
+  --resource-id "$RESOURCE_ID" \
+  --http-method "$HTTP_METHOD" \
+  --status-code 200 \
+  --response-models "application/json=Empty" \
+  --endpoint-url="$ENDPOINT" >/dev/null
 
-# AWS_PROXY統合の設定（test-functionが見つかった場合のみ）
-if [ -n "$TEST_FUNCTION_ARN" ]; then
-  # Lambda関数にAPI Gatewayからの呼び出し権限を付与
-  aws lambda add-permission \
-    --function-name "test-function" \
-    --statement-id "apigateway-invoke-$(date +%s)" \
-    --action lambda:InvokeFunction \
-    --principal apigateway.amazonaws.com \
-    --source-arn "arn:aws:execute-api:${REGION}:000000000000:${API_ID}/*/*" \
-    --endpoint-url="$ENDPOINT" 2>/dev/null || echo "[apigateway] permission may already exist"
-  
-  # AWS_PROXY統合の設定
-  aws apigateway put-integration \
-    --rest-api-id "$API_ID" \
-    --resource-id "$RESOURCE_ID" \
-    --http-method "$HTTP_METHOD" \
-    --type AWS_PROXY \
-    --integration-http-method POST \
-    --uri "arn:aws:apigateway:${REGION}:lambda:path/2015-03-31/functions/${TEST_FUNCTION_ARN}/invocations" \
-    --endpoint-url="$ENDPOINT" >/dev/null
-  
-  echo "[apigateway] AWS_PROXY integration configured (no response templates needed)"
-else
-  echo "[apigateway] WARNING: test-function not found"
-  echo "[apigateway] Skipping integration setup"
-fi
+aws apigateway put-integration-response \
+  --rest-api-id "$API_ID" \
+  --resource-id "$RESOURCE_ID" \
+  --http-method "$HTTP_METHOD" \
+  --status-code 200 \
+  --response-templates "file://$RESPONSE_TEMPLATE_FILE" \
+  --endpoint-url="$ENDPOINT" >/dev/null
 ```
 
 ### 注意点
 
 - **test-functionが見つからない場合**: 統合が設定されないため、API Gatewayのメソッドに統合が存在しない状態になります。この場合、リクエストはエラーになる可能性があります。
-- **統合レスポンスとメソッドレスポンス**: 削除処理のみ実行し、新規設定は行いません（AWS_PROXY統合では不要なため）。
+- **統合レスポンスとメソッドレスポンス**: 200のみ設定し、Lambdaのレスポンスをクライアント向けに変換します。
 
 ## 統合タイプの比較
 
 | 統合タイプ | 動作 | レスポンス | 統合レスポンス設定 | メソッドレスポンス設定 |
 |-----------|------|-----------|------------------|---------------------|
 | **MOCK** | バックエンドを呼ばない | 固定レスポンス（常に同じ） | 必要 | 必要 |
-| **AWS_PROXY** | Lambda関数を呼び出す | Lambda関数のレスポンス（動的） | 不要 | 不要 |
+| **Lambda（非プロキシ）** | マッピングテンプレートでイベントを作成 | 統合レスポンスで変換 | 必要 | 必要 |
+| **AWS_PROXY** | Lambda関数を呼び出す（参考） | Lambda関数のレスポンス（動的） | 不要 | 不要 |
 
 ## LocalStackでの動作と制限
 
@@ -268,7 +247,8 @@ Lambda関数（authz-go）を直接テストすると、正しく動作してい
         ]
     },
     "context": {
-        "token": "allow"
+        "token": "allow",
+        "internal_token": "internal-allow"
     }
 }
 ```
@@ -349,14 +329,14 @@ test-function: 呼ばれる（本来は呼ばれるべきではない）
 
 1. **現在の実装**
    - **MOCK統合**: 設定していない（削除済み）
-   - **AWS_PROXY統合**: 使用中（test-function Lambda関数を呼び出す）
-   - **統合レスポンス**: 設定していない（削除処理のみ）
-   - **メソッドレスポンス**: 設定していない（削除処理のみ）
+   - **Lambda統合（非プロキシ）**: 使用中（request templatesでAuthorizationヘッダーをinternal_tokenに書き換え）
+   - **統合レスポンス**: 200のみ設定
+   - **メソッドレスポンス**: 200のみ設定
 
 2. **統合レスポンスとメソッドレスポンス**
    - MOCK統合: 必要（固定レスポンスを返すため）
-   - AWS_PROXY統合: 不要（Lambda関数が直接HTTPレスポンスを返すため）
-   - 現在の実装: 削除処理のみ実行（既存のMOCK統合の残骸をクリーンアップ）
+   - Lambda統合（非プロキシ）: 必要（レスポンス変換のため）
+   - 現在の実装: 200のみ定義
 
 3. **test-functionの要件**
    - `test-function` Lambda関数が存在する必要がある

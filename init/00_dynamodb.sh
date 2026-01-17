@@ -8,8 +8,8 @@
 #    - 課金モード: PAY_PER_REQUEST
 #    - 既にテーブルが存在する場合はスキップ
 # 3. テーブルがアクティブになるまで待機
-# 4. 初期データの投入（token: "allow"）
-#    - Lambda Authorizerで使用される許可トークン
+# 4. 初期データの投入（token: "allow", internal_token: "internal-allow"）
+#    - Lambda Authorizerで使用される許可トークンと内部トークン
 # 5. テーブル一覧の表示（確認用）
 #
 # 注意: 既存のテーブルが存在する場合は作成をスキップしますが、
@@ -42,7 +42,7 @@ fi
 echo "[init] seed allow token"
 aws dynamodb put-item \
   --table-name "$TABLE" \
-  --item '{"token":{"S":"allow"}}' \
+  --item '{"token":{"S":"allow"},"internal_token":{"S":"internal-allow"}}' \
   --endpoint-url="$ENDPOINT" >/dev/null
 
 echo "[init] list tables"

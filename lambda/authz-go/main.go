@@ -37,6 +37,16 @@ func NewAuthorizer(ctx context.Context) (*Authorizer, error) {
 	}, nil
 }
 
+func internalTokenFromItem(item map[string]types.AttributeValue, fallback string) string {
+	if v, ok := item["internal_token"].(*types.AttributeValueMemberS); ok {
+		internalToken := strings.TrimSpace(v.Value)
+		if internalToken != "" {
+			return internalToken
+		}
+	}
+	return fallback
+}
+
 func generatePolicy(principalID, effect, methodArn string, ctx map[string]interface{}) (events.APIGatewayCustomAuthorizerResponse, error) {
 	return events.APIGatewayCustomAuthorizerResponse{
 		PrincipalID: principalID,
@@ -98,8 +108,10 @@ func (a *Authorizer) Handler(ctx context.Context, event events.APIGatewayCustomA
 	}
 
 	log.Printf("[Authorizer] Token is valid, returning Allow")
+	internalToken := internalTokenFromItem(out.Item, token)
 	return generatePolicy("user", "Allow", event.MethodArn, map[string]interface{}{
-		"token": token,
+		"token":          token,
+		"internal_token": internalToken,
 	})
 }
 

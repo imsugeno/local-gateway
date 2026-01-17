@@ -61,11 +61,14 @@ func TestMain(m *testing.M) {
 }
 
 // ヘルパー関数: テストトークンを投入
-func putTestToken(token string, active bool) error {
+func putTestToken(token string, active bool, internalToken string) error {
 	ctx := context.Background()
 	item := map[string]types.AttributeValue{
 		"token":  &types.AttributeValueMemberS{Value: token},
 		"active": &types.AttributeValueMemberBOOL{Value: active},
+	}
+	if internalToken != "" {
+		item["internal_token"] = &types.AttributeValueMemberS{Value: internalToken}
 	}
 	return testutil.PutItem(ctx, testDDBClient, TestTableName, item)
 }
@@ -153,7 +156,7 @@ func Test_存在しないトークンの場合はDenyを返すこと(t *testing.
 
 func Test_非アクティブなトークンの場合はDenyを返すこと(t *testing.T) {
 	testToken := testutil.GenerateUniqueID("inactive")
-	err := putTestToken(testToken, false)
+	err := putTestToken(testToken, false, "")
 	assert.NoError(t, err)
 	defer deleteTestToken(testToken)
 
@@ -171,7 +174,8 @@ func Test_非アクティブなトークンの場合はDenyを返すこと(t *te
 
 func Test_有効なトークンの場合はAllowを返すこと(t *testing.T) {
 	testToken := testutil.GenerateUniqueID("valid")
-	err := putTestToken(testToken, true)
+	internalToken := testToken + "-internal"
+	err := putTestToken(testToken, true, internalToken)
 	assert.NoError(t, err)
 	defer deleteTestToken(testToken)
 
@@ -186,12 +190,14 @@ func Test_有効なトークンの場合はAllowを返すこと(t *testing.T) {
 	assert.Equal(t, "user", resp.PrincipalID)
 	assert.Equal(t, "Allow", resp.PolicyDocument.Statement[0].Effect)
 	assert.Equal(t, testToken, resp.Context["token"])
+	assert.Equal(t, internalToken, resp.Context["internal_token"])
 }
 
 func Test_Bearerプレフィックス付きトークンが正しく処理されること(t *testing.T) {
 	// 注意: トークン自体に "bearer" を含まないようにする（除去ロジックとの競合を避ける）
 	testToken := testutil.GenerateUniqueID("token")
-	err := putTestToken(testToken, true)
+	internalToken := testToken + "-internal"
+	err := putTestToken(testToken, true, internalToken)
 	assert.NoError(t, err)
 	defer deleteTestToken(testToken)
 
@@ -216,6 +222,7 @@ func Test_Bearerプレフィックス付きトークンが正しく処理され�
 			assert.Equal(t, "user", resp.PrincipalID)
 			assert.Equal(t, "Allow", resp.PolicyDocument.Statement[0].Effect)
 			assert.Equal(t, testToken, resp.Context["token"])
+			assert.Equal(t, internalToken, resp.Context["internal_token"])
 		})
 	}
 }

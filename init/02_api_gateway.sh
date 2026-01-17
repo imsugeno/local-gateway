@@ -8,7 +8,7 @@
 # 4. TOKENタイプのAuthorizer（token-authorizer）の作成または取得
 # 5. Lambda関数へのAPI Gatewayからの呼び出し権限を付与
 # 6. HTTPメソッド（GET）の設定とAuthorizerの関連付け
-# 7. AWS_PROXY統合の設定（test-function Lambda関数を呼び出す）
+# 7. Lambda統合（非プロキシ）+ マッピングテンプレートの設定（test-function Lambda関数を呼び出す）
 # 8. APIのデプロイ（testステージ）
 # 9. デプロイ後のAPI URLを表示
 #
@@ -176,10 +176,10 @@ for status_code in 200 400 500; do
 done
 echo "[apigateway] cleanup completed"
 
-# AWS_PROXY統合の設定
+# Lambda統合（非プロキシ）とリクエストマッピングテンプレートの設定
 # 役割: バックエンド統合の種類と動作を定義
 # 何を設定するか: Lambda関数（test-function）を呼び出す統合を設定
-# AWS_PROXY統合: Lambda関数が直接HTTPレスポンスを返すため、統合レスポンス・メソッドレスポンスの設定は不要
+# マッピングテンプレートで Authorization ヘッダーを internal_token に置き換える
 if [ -n "$TEST_FUNCTION_ARN" ]; then
   echo "[apigateway] test-function ARN: $TEST_FUNCTION_ARN"
   
@@ -193,20 +193,102 @@ if [ -n "$TEST_FUNCTION_ARN" ]; then
     --source-arn "arn:aws:execute-api:${REGION}:000000000000:${API_ID}/*/*" \
     --endpoint-url="$ENDPOINT" 2>/dev/null || echo "[apigateway] permission may already exist"
   
-  # AWS_PROXY統合の設定（Lambda関数を呼び出す）
-  echo "[apigateway] setting up AWS_PROXY integration with test-function"
+  # リクエストマッピングテンプレートを作成（Authorizationヘッダーを書き換える）
+  REQUEST_VTL_FILE="/tmp/integration-request-template.vtl"
+  REQUEST_TEMPLATE_FILE="/tmp/request-templates.json"
+  RESPONSE_TEMPLATE_FILE="/tmp/response-templates.json"
+  cat > "$REQUEST_VTL_FILE" <<'VTL'
+#set($allParams = $input.params())
+#set($internalToken = $context.authorizer.internal_token)
+{
+  "resource": "$context.resourcePath",
+  "path": "$context.path",
+  "httpMethod": "$context.httpMethod",
+  "headers": {
+    "Authorization": "Bearer $util.escapeJavaScript($internalToken)"
+    #foreach($header in $allParams.header.keySet())
+      #if(!$header.equalsIgnoreCase("Authorization"))
+        ,"$header": "$util.escapeJavaScript($allParams.header.get($header))"
+      #end
+    #end
+  },
+  "queryStringParameters": {
+    #foreach($queryParam in $allParams.querystring.keySet())
+      "$queryParam": "$util.escapeJavaScript($allParams.querystring.get($queryParam))"
+      #if($foreach.hasNext),#end
+    #end
+  },
+  "pathParameters": {
+    #foreach($pathParam in $allParams.path.keySet())
+      "$pathParam": "$util.escapeJavaScript($allParams.path.get($pathParam))"
+      #if($foreach.hasNext),#end
+    #end
+  },
+  "requestContext": {
+    "requestId": "$context.requestId",
+    "resourceId": "$context.resourceId",
+    "resourcePath": "$context.resourcePath",
+    "httpMethod": "$context.httpMethod",
+    "stage": "$context.stage",
+    "identity": {
+      "sourceIp": "$context.identity.sourceIp",
+      "userAgent": "$context.identity.userAgent"
+    },
+    "authorizer": {
+      "token": "$context.authorizer.token",
+      "internal_token": "$context.authorizer.internal_token"
+    }
+  },
+  "body": "$util.escapeJavaScript($input.body)",
+  "isBase64Encoded": false
+}
+VTL
+
+  python - <<'PY'
+import json
+from pathlib import Path
+
+request_template = Path("/tmp/integration-request-template.vtl").read_text()
+Path("/tmp/request-templates.json").write_text(json.dumps({"application/json": request_template}))
+Path("/tmp/response-templates.json").write_text(json.dumps({"application/json": "$input.path('$.body')"}))
+PY
+
+  # Lambda統合（非プロキシ）の設定
+  echo "[apigateway] setting up Lambda integration (non-proxy) with request templates"
   aws apigateway put-integration \
     --rest-api-id "$API_ID" \
     --resource-id "$RESOURCE_ID" \
     --http-method "$HTTP_METHOD" \
-    --type AWS_PROXY \
+    --type AWS \
     --integration-http-method POST \
     --uri "arn:aws:apigateway:${REGION}:lambda:path/2015-03-31/functions/${TEST_FUNCTION_ARN}/invocations" \
+    --request-templates "file://$REQUEST_TEMPLATE_FILE" \
+    --passthrough-behavior WHEN_NO_MATCH \
     --endpoint-url="$ENDPOINT" >/dev/null
-  
-  # AWS_PROXY統合の場合、統合レスポンスとメソッドレスポンスの設定は不要
-  # （Lambda関数が直接HTTPレスポンスを返すため）
-  echo "[apigateway] AWS_PROXY integration configured (no response templates needed)"
+
+  # メソッドレスポンスと統合レスポンスを設定
+  echo "[apigateway] setting up method response (200)"
+  aws apigateway put-method-response \
+    --rest-api-id "$API_ID" \
+    --resource-id "$RESOURCE_ID" \
+    --http-method "$HTTP_METHOD" \
+    --status-code 200 \
+    --response-models "application/json=Empty" \
+    --response-parameters "method.response.header.Content-Type=true" \
+    --endpoint-url="$ENDPOINT" >/dev/null
+
+  echo "[apigateway] setting up integration response (200)"
+  aws apigateway put-integration-response \
+    --rest-api-id "$API_ID" \
+    --resource-id "$RESOURCE_ID" \
+    --http-method "$HTTP_METHOD" \
+    --status-code 200 \
+    --selection-pattern "" \
+    --response-templates "file://$RESPONSE_TEMPLATE_FILE" \
+    --response-parameters "method.response.header.Content-Type='application/json'" \
+    --endpoint-url="$ENDPOINT" >/dev/null
+
+  echo "[apigateway] Lambda integration configured with request templates"
 else
   echo "[apigateway] WARNING: test-function not found"
   echo "[apigateway] Available Lambda functions:"
@@ -227,7 +309,8 @@ fi
 #    ↓
 # 【認証成功時のみ】メソッド（GET）が実行される
 #    ↓
-# 【AWS_PROXY統合】test-function Lambda関数が呼び出される
+# 【Lambda統合（非プロキシ）】マッピングテンプレートでAuthorizationヘッダーをinternal_tokenに書き換えた上で、
+# test-function Lambda関数が呼び出される
 #    ↓
 # クライアントレスポンス ← Lambda関数のレスポンスがそのまま返る
 

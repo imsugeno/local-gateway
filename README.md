@@ -79,7 +79,7 @@ docker compose logs awscli
 
 #### API Gatewayへのリクエストテスト
 
-**注意**: 現在の実装では、AWS_PROXY統合によりtest-function Lambda関数をバックエンドとして呼び出しています。
+**注意**: 現在の実装では、Lambda統合（非プロキシ）+リクエストマッピングテンプレートによりtest-function Lambda関数をバックエンドとして呼び出しています。
 LocalStackの制限により、Lambda AuthorizerがDenyを返した場合でも、バックエンド（test-function）が呼び出され、ステータスコード200が返される場合があります。
 実際のAWS環境では、AuthorizerがDenyを返すと403 Forbiddenが返され、バックエンドは呼び出されませんが、LocalStackでは動作検証の制限として、この動作が正しく実装されていない場合があります。
 Authorizerの動作を確認する場合は、以降に掲載される「Lambda関数の個別テスト」で実際の挙動を確認してください。
@@ -322,12 +322,14 @@ make clean-localstack
 
 ### スキーマ
 - **主キー**: `token` (String)
-- **属性**: `active` (Boolean, オプション)
+- **属性**:
+  - `active` (Boolean, オプション)
+  - `internal_token` (String, オプション) - トークン交換用の内部トークン
   - `true` または未設定: 許可
   - `false`: 拒否
 
 ### 初期データ
-- `token: "allow"` (active属性なし = 許可)
+- `token: "allow"` / `internal_token: "internal-allow"` (active属性なし = 許可)
 
 ## Lambda Authorizer仕様
 
@@ -339,6 +341,7 @@ make clean-localstack
   3. 存在し、`active`が`false`でなければAllow
   4. それ以外はDeny
 - **出力**: IAM Policy（Allow/Deny）
+  - Allow時のContextに`internal_token`を含める（DynamoDBの`internal_token`属性を利用）
 
 ## トラブルシューティング
 
