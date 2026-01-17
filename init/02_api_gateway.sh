@@ -156,7 +156,6 @@ aws apigateway update-method \
   --endpoint-url="$ENDPOINT" >/dev/null
 
 # 既存の統合レスポンスとメソッドレスポンスを削除（MOCK統合の残骸をクリーンアップ）
-# AWS_PROXY統合を使用する場合、これらの設定は不要なため、事前に削除する
 echo "[apigateway] cleaning up existing integration responses and method responses"
 # 一般的なステータスコードを削除（200, 400, 500など）
 for status_code in 200 400 500; do
