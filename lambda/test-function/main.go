@@ -10,16 +10,28 @@ import (
 )
 
 type Response struct {
-	Message string `json:"message"`
-	Status  string `json:"status"`
+	Message       string `json:"message"`
+	Status        string `json:"status"`
+	Authorization string `json:"authorization"`
+}
+
+func extractAuthorizationHeader(headers map[string]string) string {
+	if headers == nil {
+		return ""
+	}
+	if value, ok := headers["Authorization"]; ok {
+		return value
+	}
+	return headers["authorization"]
 }
 
 func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	log.Printf("Received event: %+v", event)
 
 	response := Response{
-		Message: "Hello from test-function!",
-		Status:  "success",
+		Message:       "Hello from test-function!",
+		Status:        "success",
+		Authorization: extractAuthorizationHeader(event.Headers),
 	}
 
 	body, err := json.Marshal(response)
