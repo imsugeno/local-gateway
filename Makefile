@@ -9,10 +9,13 @@ CGO_ENABLED := 0
 
 LAMBDAS := $(shell find $(LAMBDA_DIR) -maxdepth 1 -mindepth 1 -type d)
 
-# .envファイルからLOCALSTACK_PORTを読み込む（デフォルト: 4566）
+# .envファイルから環境変数を読み込む
 LOCALSTACK_PORT := $(shell grep -E '^LOCALSTACK_PORT=' .env 2>/dev/null | sed 's/^LOCALSTACK_PORT=//' | tr -d '\n' || echo "4566")
+AWS_ACCESS_KEY_ID := $(shell grep -E '^AWS_ACCESS_KEY_ID=' .env 2>/dev/null | sed 's/^AWS_ACCESS_KEY_ID=//' | tr -d '\n')
+AWS_SECRET_ACCESS_KEY := $(shell grep -E '^AWS_SECRET_ACCESS_KEY=' .env 2>/dev/null | sed 's/^AWS_SECRET_ACCESS_KEY=//' | tr -d '\n')
+AWS_REGION := $(shell grep -E '^AWS_REGION=' .env 2>/dev/null | sed 's/^AWS_REGION=//' | tr -d '\n')
 
-.PHONY: all build clean deploy exec-curl exec-lambda list-lambdas get-api-id check-iam-role check-iam-policy clean-localstack test help
+.PHONY: all build clean deploy exec-curl exec-lambda list-lambdas get-api-id check-apigateway check-iam-role check-iam-policy clean-localstack test help
 
 # デフォルトターゲット（helpを表示）
 .DEFAULT_GOAL := help
@@ -28,6 +31,7 @@ help:
 	@echo ""
 	@echo "  make list-lambdas     - LocalStackに登録されているLambda関数の一覧を表示"
 	@echo "  make get-api-id       - API GatewayのIDを取得して表示"
+	@echo "  make check-apigateway - API Gatewayの詳細情報を表示"
 	@echo "  make check-iam-role   - IAM Role (lambda-authorizer-role) の存在確認"
 	@echo "  make check-iam-policy - IAM Policy (lambda-authorizer-policy) の存在確認"
 	@echo ""
@@ -151,6 +155,80 @@ get-api-id:
 	    exit 1; \
 	  else \
 	    echo "API ID: $$API_ID"; \
+	  fi; \
+	fi
+
+# API Gatewayの詳細情報を表示
+check-apigateway:
+	@echo "==> checking API Gateway: local-gateway-api"
+	@if [ "$$IS_DEV_CONTAINER" = "true" ] && which aws >/dev/null 2>&1; then \
+	  echo "Using AWS CLI directly (devcontainer mode)"; \
+	  API_ID=$$(AWS_PAGER="" aws apigateway get-rest-apis \
+	    --endpoint-url=http://localstack:4566 \
+	    --query "items[?name=='local-gateway-api'].id | [0]" \
+	    --output text 2>/dev/null); \
+	  if [ -n "$$API_ID" ] && [ "$$API_ID" != "None" ]; then \
+	    echo "API Gateway exists:"; \
+	    echo "  API ID: $$API_ID"; \
+	    echo "  API URL: http://$$API_ID.execute-api.localhost.localstack.cloud:$(LOCALSTACK_PORT)/test/test"; \
+	    echo ""; \
+	    echo "Resources:"; \
+	    AWS_PAGER="" aws apigateway get-resources \
+	      --rest-api-id "$$API_ID" \
+	      --endpoint-url=http://localstack:4566 \
+	      --output table 2>&1 || echo "  (Could not list resources)"; \
+	    echo ""; \
+	    echo "Authorizers:"; \
+	    AWS_PAGER="" aws apigateway get-authorizers \
+	      --rest-api-id "$$API_ID" \
+	      --endpoint-url=http://localstack:4566 \
+	      --output table 2>&1 || echo "  (Could not list authorizers)"; \
+	    echo ""; \
+	    echo "Stages:"; \
+	    AWS_PAGER="" aws apigateway get-stages \
+	      --rest-api-id "$$API_ID" \
+	      --endpoint-url=http://localstack:4566 \
+	      --output table 2>&1 || echo "  (Could not list stages)"; \
+	  else \
+	    echo "ERROR: API Gateway 'local-gateway-api' not found."; \
+	    exit 1; \
+	  fi; \
+	else \
+	  echo "Using docker exec (host mode)"; \
+	  echo "Checking if containers are running..."; \
+	  if ! docker ps --format "{{.Names}}" 2>/dev/null | grep -q "^gateway-awscli$$"; then \
+	    echo "ERROR: awscli container (gateway-awscli) is not running. Run 'docker compose up -d' first."; \
+	    exit 1; \
+	  fi; \
+	  API_ID=$$(docker exec gateway-awscli aws apigateway get-rest-apis \
+	    --endpoint-url=http://localstack:4566 \
+	    --query "items[?name=='local-gateway-api'].id | [0]" \
+	    --output text 2>/dev/null); \
+	  if [ -n "$$API_ID" ] && [ "$$API_ID" != "None" ]; then \
+	    echo "API Gateway exists:"; \
+	    echo "  API ID: $$API_ID"; \
+	    echo "  API URL: http://$$API_ID.execute-api.localhost.localstack.cloud:$(LOCALSTACK_PORT)/test/test"; \
+	    echo ""; \
+	    echo "Resources:"; \
+	    docker exec gateway-awscli aws apigateway get-resources \
+	      --rest-api-id "$$API_ID" \
+	      --endpoint-url=http://localstack:4566 \
+	      --output table 2>&1 || echo "  (Could not list resources)"; \
+	    echo ""; \
+	    echo "Authorizers:"; \
+	    docker exec gateway-awscli aws apigateway get-authorizers \
+	      --rest-api-id "$$API_ID" \
+	      --endpoint-url=http://localstack:4566 \
+	      --output table 2>&1 || echo "  (Could not list authorizers)"; \
+	    echo ""; \
+	    echo "Stages:"; \
+	    docker exec gateway-awscli aws apigateway get-stages \
+	      --rest-api-id "$$API_ID" \
+	      --endpoint-url=http://localstack:4566 \
+	      --output table 2>&1 || echo "  (Could not list stages)"; \
+	  else \
+	    echo "ERROR: API Gateway 'local-gateway-api' not found."; \
+	    exit 1; \
 	  fi; \
 	fi
 
@@ -282,30 +360,32 @@ check-iam-policy:
 	  fi; \
 	fi
 
-# Lambda関数とAPI Gatewayのデプロイ（LocalStackが起動している必要がある）
+# Lambda関数とAPI Gatewayのデプロイ（Terraformを使用）
+# LocalStackが起動している必要がある
 deploy: build
-	@echo "==> deploying Lambda function and API Gateway"
-	@if [ "$$IS_DEV_CONTAINER" = "true" ] && which aws >/dev/null 2>&1; then \
-	  echo "Deploying (devcontainer mode)..."; \
-	  echo "Deploying Lambda function..."; \
-	  LAMBDA_BASE_DIR="$(LAMBDA_DIR_ABS)" /bin/sh "$(CURDIR)/init/01_lambda.sh" 2>&1 || \
-	    (echo "ERROR: Lambda deployment failed."; exit 1); \
-	  echo "Deploying API Gateway..."; \
-	  /bin/sh "$(CURDIR)/init/02_api_gateway.sh" 2>&1 || \
-	    (echo "ERROR: API Gateway deployment failed."; exit 1); \
+	@echo "==> deploying Lambda function and API Gateway via Terraform"
+	@echo "Checking if LocalStack is running..."
+	@if [ "$$IS_DEV_CONTAINER" = "true" ]; then \
+	  echo "Running Terraform (devcontainer mode)..."; \
+	  cd $(CURDIR)/terraform/local && \
+	  terraform init && \
+	  terraform apply -auto-approve; \
 	else \
-	  echo "Deploying (host mode via docker)..."; \
-	  echo "Checking if containers are running..."; \
-	  if ! docker ps --format "{{.Names}}" 2>/dev/null | grep -q "^gateway-awscli$$"; then \
-	    echo "ERROR: awscli container (gateway-awscli) is not running. Run 'docker compose up -d' first."; \
+	  echo "Running Terraform (host mode via docker)..."; \
+	  if ! docker ps --format "{{.Names}}" 2>/dev/null | grep -q "^gateway-localstack$$"; then \
+	    echo "ERROR: LocalStack container (gateway-localstack) is not running. Run 'docker compose up -d' first."; \
 	    exit 1; \
 	  fi; \
-	  echo "Deploying Lambda function..."; \
-	  docker exec gateway-awscli /bin/sh -c "/init/01_lambda.sh" 2>&1 || \
-	    (echo "ERROR: Lambda deployment failed. Check logs with 'docker compose logs awscli'"; exit 1); \
-	  echo "Deploying API Gateway..."; \
-	  docker exec gateway-awscli /bin/sh -c "/init/02_api_gateway.sh" 2>&1 || \
-	    (echo "ERROR: API Gateway deployment failed. Check logs with 'docker compose logs awscli'"; exit 1); \
+	  docker run --rm \
+	    --network local-gateway_local-gateway \
+	    -e AWS_ACCESS_KEY_ID=$(AWS_ACCESS_KEY_ID) \
+	    -e AWS_SECRET_ACCESS_KEY=$(AWS_SECRET_ACCESS_KEY) \
+	    -e AWS_REGION=$(AWS_REGION) \
+	    -v $(CURDIR)/terraform:/terraform \
+	    -v $(CURDIR)/lambda:/lambda:ro \
+	    -w /terraform/local \
+	    hashicorp/terraform:latest \
+	    sh -c "terraform init && terraform apply -auto-approve"; \
 	fi
 	@echo "==> Deployment completed successfully"
 
@@ -381,7 +461,7 @@ exec-curl:
 
 # Lambda関数を直接呼び出して実行（引数で関数名を指定）
 # 使用例: make exec-lambda LAMBDA_NAME=test-function
-# 使用例: make exec-lambda LAMBDA_NAME=authz-go PAYLOAD='{"type":"TOKEN","authorizationToken":"Bearer allow","methodArn":"arn:aws:execute-api:us-east-1:000000000000:test/test/GET"}'
+# 使用例: make exec-lambda LAMBDA_NAME=authz-go PAYLOAD='{"type":"TOKEN","authorizationToken":"Bearer allow","methodArn":"arn:aws:execute-api:ap-northeast-1:000000000000:test/test/GET"}'
 exec-lambda:
 	@if [ -z "$(LAMBDA_NAME)" ]; then \
 	  echo "ERROR: LAMBDA_NAME is required"; \
@@ -389,7 +469,7 @@ exec-lambda:
 	  echo ""; \
 	  echo "Examples:"; \
 	  echo "  make exec-lambda LAMBDA_NAME=test-function"; \
-	  echo "  make exec-lambda LAMBDA_NAME=authz-go PAYLOAD='{\"type\":\"TOKEN\",\"authorizationToken\":\"Bearer allow\",\"methodArn\":\"arn:aws:execute-api:us-east-1:000000000000:test/test/GET\"}'"; \
+	  echo "  make exec-lambda LAMBDA_NAME=authz-go PAYLOAD='{\"type\":\"TOKEN\",\"authorizationToken\":\"Bearer allow\",\"methodArn\":\"arn:aws:execute-api:ap-northeast-1:000000000000:test/test/GET\"}'"; \
 	  exit 1; \
 	fi
 	@echo "==> executing Lambda function: $(LAMBDA_NAME)"

@@ -45,8 +45,8 @@ services:
     container_name: gateway-awscli
     image: amazon/aws-cli:latest
     depends_on:
-      localstack:
-        condition: service_healthy
+      terraform:
+        condition: service_completed_successfully
     environment:
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
@@ -55,11 +55,10 @@ services:
       - LOCALSTACK_PORT=${LOCALSTACK_PORT}
     volumes:
       - ./init:/init:ro
-      - ./lambda:/init/../lambda:ro
     entrypoint: ["/bin/sh", "-lc"]
     command:
       [
-        "/init/00_dynamodb.sh && /init/01_lambda.sh && /init/02_api_gateway.sh && sleep infinity",
+        "/init/seed_dynamodb.sh && sleep infinity",
       ]
     networks:
       - local-gateway
@@ -86,6 +85,25 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     working_dir: /src
     tty: true
+    networks:
+      - local-gateway
+
+  terraform:
+    container_name: gateway-terraform
+    image: hashicorp/terraform:latest
+    depends_on:
+      localstack:
+        condition: service_healthy
+    environment:
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION}
+    volumes:
+      - ./terraform:/terraform
+      - ./lambda:/lambda:ro
+    working_dir: /terraform/local
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["terraform init && terraform apply -auto-approve"]
     networks:
       - local-gateway
 
