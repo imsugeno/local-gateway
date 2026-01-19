@@ -244,7 +244,7 @@ Lambda関数（authz-go）を直接テストすると、正しく動作してい
         "Statement": [
             {
                 "Effect": "Deny",
-                "Resource": ["arn:aws:execute-api:us-east-1:000000000000:test/test/GET"]
+                "Resource": ["arn:aws:execute-api:ap-northeast-1:000000000000:test/test/GET"]
             }
         ]
     },
@@ -263,7 +263,7 @@ Lambda関数（authz-go）を直接テストすると、正しく動作してい
         "Statement": [
             {
                 "Effect": "Allow",
-                "Resource": ["arn:aws:execute-api:us-east-1:000000000000:test/test/GET"]
+                "Resource": ["arn:aws:execute-api:ap-northeast-1:000000000000:test/test/GET"]
             }
         ]
     },

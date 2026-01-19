@@ -14,7 +14,7 @@ JWTベース認証における「認可判断をDynamoDBで外出しする設計
 
 - **認可フロー**: API Gateway (REST API) → Lambda Authorizer (TOKEN) → DynamoDB
 - **データストア**: DynamoDB（認可情報の保存）
-- **Lambda**: Go言語で実装、provided.al2 + bootstrap方式
+- **Lambda**: Go言語で実装、provided.al2023 + bootstrap方式
 - **環境**: LocalStack（AWS代替）
 - **GUI**: dynamodb-adminでデータ編集可能
 - **当PoCではJWTトークンの検証は省略してます**
@@ -154,13 +154,13 @@ make exec-lambda LAMBDA_NAME=test-function
 
 # authz-go（Lambda Authorizer）を実行
 # 有効なトークン "allow" で実行（Allowが返る）
-make exec-lambda LAMBDA_NAME=authz-go PAYLOAD='{"type":"TOKEN","authorizationToken":"Bearer allow","methodArn":"arn:aws:execute-api:us-east-1:000000000000:test/test/GET"}'
+make exec-lambda LAMBDA_NAME=authz-go PAYLOAD='{"type":"TOKEN","authorizationToken":"Bearer allow","methodArn":"arn:aws:execute-api:ap-northeast-1:000000000000:test/test/GET"}'
 
 # 無効なトークンで実行（Denyが返る）
-make exec-lambda LAMBDA_NAME=authz-go PAYLOAD='{"type":"TOKEN","authorizationToken":"Bearer invalid-token","methodArn":"arn:aws:execute-api:us-east-1:000000000000:test/test/GET"}'
+make exec-lambda LAMBDA_NAME=authz-go PAYLOAD='{"type":"TOKEN","authorizationToken":"Bearer invalid-token","methodArn":"arn:aws:execute-api:ap-northeast-1:000000000000:test/test/GET"}'
 
 # トークンなしで実行（Denyが返る）
-make exec-lambda LAMBDA_NAME=authz-go PAYLOAD='{"type":"TOKEN","authorizationToken":"","methodArn":"arn:aws:execute-api:us-east-1:000000000000:test/test/GET"}'
+make exec-lambda LAMBDA_NAME=authz-go PAYLOAD='{"type":"TOKEN","authorizationToken":"","methodArn":"arn:aws:execute-api:ap-northeast-1:000000000000:test/test/GET"}'
 
 # 引数を指定しない場合は使用方法が表示されます
 make exec-lambda
@@ -292,9 +292,11 @@ make clean-localstack
 ├── docs/                       # ドキュメント
 │   └── lambda_authorizer_poc_implementation_plan.md
 ├── init/                       # 初期化スクリプト
-│   ├── 00_dynamodb.sh         # DynamoDBテーブル作成・初期データ投入
-│   ├── 01_lambda.sh           # Lambda関数デプロイ（IAM Role/Policy含む）
-│   └── 02_api_gateway.sh      # API Gateway作成・Authorizer設定
+│   └── seed_dynamodb.sh       # DynamoDBシードデータ投入
+├── terraform/                  # Terraform設定（詳細はdocs/terraform.md参照）
+│   ├── modules/               # 共通モジュール（dynamodb, lambda, apigateway）
+│   ├── local/                 # ローカル環境用（LocalStack）
+│   └── production/            # 本番環境用（AWS）
 └── lambda/                     # Lambda関数
     ├── go.mod                  # 共通のGo依存関係
     ├── go.sum                  # 依存関係のチェックサム
